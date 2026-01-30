@@ -438,6 +438,53 @@ def mutate_weights(weights: Dict[str, float]) -> Dict[str, float]:
     }
 
 
+def init_population_weights(
+    base_weights: Dict[str, float], count: int
+) -> List[Dict[str, float]]:
+    # 초기 세대의 가중치 풀을 만든다 (기본값 + 변이)
+    if count <= 0:
+        return []
+    population = [base_weights.copy()]
+    while len(population) < count:
+        population.append(mutate_weights(base_weights))
+    return population
+
+
+def select_elite_weights(
+    states: List[GameState],
+    population_weights: List[Dict[str, float]],
+    elite_fraction: float = 0.2,
+) -> List[Dict[str, float]]:
+    # 점수 기준 상위 엘리트를 선택
+    if not states or not population_weights:
+        return []
+    ranked = sorted(
+        zip(states, population_weights),
+        key=lambda pair: pair[0].score,
+        reverse=True,
+    )
+    elite_count = max(1, int(len(population_weights) * elite_fraction))
+    return [weights.copy() for _, weights in ranked[:elite_count]]
+
+
+def evolve_population(
+    states: List[GameState],
+    population_weights: List[Dict[str, float]],
+    elite_fraction: float = 0.2,
+) -> Tuple[List[Dict[str, float]], List[Dict[str, float]]]:
+    # 엘리트를 기반으로 다음 세대 가중치 풀 생성
+    elites = select_elite_weights(states, population_weights, elite_fraction)
+    if not elites:
+        fallback = DEFAULT_WEIGHTS.copy()
+        return init_population_weights(fallback, len(population_weights)), [fallback]
+
+    next_population = [elite.copy() for elite in elites]
+    while len(next_population) < len(population_weights):
+        parent = random.choice(elites)
+        next_population.append(mutate_weights(parent))
+    return next_population, elites
+
+
 def weights_file_path(path: Optional[Path] = None) -> Path:
     # 가중치 파일 경로를 결정 (기본은 스크립트와 같은 폴더)
     if path is None:
@@ -556,7 +603,8 @@ def run():
     font = pygame.font.SysFont("monospace", 14)
     small_font = pygame.font.SysFont("monospace", 12)
 
-    weights = load_weights()
+    base_weights = load_weights()
+    population_weights = init_population_weights(base_weights, BOARD_COUNT)
     states = init_generation(BOARD_COUNT)
     is_running = False
     speed_ms = 100
@@ -637,13 +685,16 @@ def run():
                 if all_game_over(states):
                     # 모든 보드가 끝나면 다음 세대로 넘어감
                     generation += 1
-                    weights = mutate_weights(weights)
-                    save_weights(weights)
+                    population_weights, elites = evolve_population(
+                        states, population_weights
+                    )
+                    save_weights(elites[0])
                     states = init_generation(BOARD_COUNT)
                 else:
-                    for state in states:
+                    for idx, state in enumerate(states):
                         if state.game_over:
                             continue
+                        weights = population_weights[idx]
                         if state.current_piece is None:
                             # 새로운 블록을 스폰하고 자동 이동 계획 계산
                             spawn_piece(state, weights)
