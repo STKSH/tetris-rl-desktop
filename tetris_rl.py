@@ -18,7 +18,7 @@ GRID_ROWS = 2
 BOARD_COUNT = GRID_COLUMNS * GRID_ROWS
 GRID_PADDING = 8
 HUD_HEIGHT = 40
-MIN_SPEED_MS = 1
+MIN_SPEED_MS = 5
 
 # RL 학습률 및 할인율
 LEARNING_RATE = 0.001       # 학습 속도 (너무 빠르면 불안정하므로 0.001 추천)
@@ -315,19 +315,24 @@ def step_game(state: GameState, weights: Dict[str, float]):
         state.lines_cleared += lines
         state.level = state.lines_cleared // 10 + 1
         
-        # [수정] 보상 체계 개선 (Reward Shaping)
-        # 1. 줄 지우기 보상
-        reward = float(lines * lines * 20)
+       # [수정] 보상 체계 완성 (Reward Shaping)
+        # 1. 줄 지우기 보상 (화끈하게 줌)
+        reward = float(lines * lines * 30.0)
         
-        # 2. [핵심] 높이 페널티 추가! (높을수록 실시간으로 감점)
-        # 현재 보드의 높이 특성을 가져와서 벌점을 매김
+        # 2. 페널티 3대장 (높이, 구멍, 굴곡) 적용
         current_features = extract_features(cleared_board, lines)
+        
         total_height = current_features["height"]
         total_holes = current_features["holes"]
+        total_bumpiness = current_features["bumpiness"] # [추가] 굴곡도 가져옴
         
-        # "높이가 높거나 구멍이 많으면 점수를 깎는다"
-        reward -= (total_height * 0.1)  # 높이 1칸당 -0.1점
-        reward -= (total_holes * 0.5)   # 구멍 1개당 -0.5점
+        # 3. 실시간 감점 로직
+        # - 높이: 높을수록 생존 위협 -> 강력하게 깎음
+        # - 구멍: 복구 불가능한 손해 -> 매우 강력하게 깎음
+        # - 굴곡: 비효율적 -> 적당히 깎음
+        reward -= (total_height * 2.5)    # 높이 1칸당 -1.5점
+        reward -= (total_holes * 50.0)     # 구멍 1개당 -3.0점 (구멍은 진짜 나쁨!)
+        reward -= (total_bumpiness * 1.5) # [추가] 굴곡 1단위당 -0.5점
         
         next_value = evaluate_board(cleared_board, 0, weights)
         
@@ -336,8 +341,7 @@ def step_game(state: GameState, weights: Dict[str, float]):
                 weights, state.pending_features,
                 reward, next_value, LEARNING_RATE, DISCOUNT_FACTOR
             )
-        
-        # 상태 업데이트
+
         state.board = cleared_board
         state.current_piece = None
         state.pending_features = None
